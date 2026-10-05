@@ -1,6 +1,6 @@
 import express from 'express';
 import multer from 'multer';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, createPartFromUri, createUserContent } from '@google/genai';
 import { createClient } from '@supabase/supabase-js';
 import cors from 'cors';
 import fs from 'fs';
@@ -9,8 +9,7 @@ const app = express();
 app.use(cors());
 const upload = multer({ dest: 'uploads/' });
 
-// Initialize Gemini and Supabase clients 
-// (Make sure to set GEMINI_API_KEY, SUPABASE_URL, and SUPABASE_SERVICE_ROLE_KEY in your environment variables)
+// Initialize Gemini and Supabase clients
 const ai = new GoogleGenAI({});
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
@@ -19,7 +18,7 @@ app.post('/api/verify-lighting', upload.single('pdfFile'), async (req, res) => {
         const { manufacturer, country, productType } = req.body;
         const filePath = req.file.path;
 
-        // 1. Upload PDF to Gemini File API for processing
+        // 1. Upload PDF to Gemini File API
         const uploadedFile = await ai.files.upload({
             file: filePath,
             config: { mimeType: 'application/pdf' }
@@ -31,7 +30,7 @@ app.post('/api/verify-lighting', upload.single('pdfFile'), async (req, res) => {
             standardRules = "Rules: Luminous efficacy must be >= 120 lm/W, CRI must be >= 70, IP rating must be IP65 or higher.";
         }
 
-        // 3. Ask Gemini to extract specifications and cross-check against rules
+        // 3. Ask Gemini to extract specifications and cross-check using SDK content helpers
         const prompt = `
             You are a lighting compliance verification engine. Read this PDF data sheet.
             Extract the following parameters: Wattage, Delivered Lumens, Luminous Efficacy, CCT, CRI, and IP Rating.
@@ -53,7 +52,10 @@ app.post('/api/verify-lighting', upload.single('pdfFile'), async (req, res) => {
 
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
-            contents: [uploadedFile, prompt] // <-- Pass uploadedFile directly here
+            contents: createUserContent([
+                createPartFromUri(uploadedFile.uri, uploadedFile.mimeType),
+                prompt
+            ])
         });
 
         // Clean and parse the AI response text into JSON
