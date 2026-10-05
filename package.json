@@ -1,0 +1,15 @@
+{
+  "name": "lighting-verification-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@google/genai": "latest",
+    "@supabase/supabase-js": "latest",
+    "express": "latest",
+    "multer": "latest"
+  }
+}
