@@ -2,9 +2,11 @@ import express from 'express';
 import multer from 'multer';
 import { GoogleGenAI } from '@google/genai';
 import { createClient } from '@supabase/supabase-js';
+import cors from 'cors';
 import fs from 'fs';
 
 const app = express();
+app.use(cors());
 const upload = multer({ dest: 'uploads/' });
 
 // Initialize Gemini and Supabase clients 

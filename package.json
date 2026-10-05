@@ -10,6 +10,7 @@
     "@google/genai": "latest",
     "@supabase/supabase-js": "latest",
     "express": "latest",
-    "multer": "latest"
+    "multer": "latest",
+    "cors": "latest"
   }
 }
