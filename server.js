@@ -9,45 +9,53 @@ const app = express();
 app.use(cors());
 const upload = multer({ dest: 'uploads/' });
 
-// Initialize Gemini and Supabase clients
 const ai = new GoogleGenAI({});
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
+// Define standards for different lighting categories
+const lightingStandards = {
+    "Recessed Spotlight": "Luminous efficacy must be >= 80 lm/W, CRI must be >= 90.",
+    "Street Light": "Luminous efficacy must be >= 120 lm/W, CRI must be >= 70, IP rating must be IP65 or higher.",
+    "High Bay": "Luminous efficacy must be >= 130 lm/W, CRI must be >= 80."
+};
+
 app.post('/api/verify-lighting', upload.single('pdfFile'), async (req, res) => {
     try {
-        const { manufacturer, country, productType } = req.body;
+        const { manufacturer, country } = req.body;
         const filePath = req.file.path;
 
-        // 1. Upload PDF to Gemini File API
+        // 1. Upload multi-page PDF to Gemini File API
         const uploadedFile = await ai.files.upload({
             file: filePath,
             config: { mimeType: 'application/pdf' }
         });
 
-        // 2. Define product-specific rules dynamically
-        let standardRules = "Rules: Luminous efficacy must be >= 80 lm/W, CRI must be >= 90.";
-        if (productType === "Street Light") {
-            standardRules = "Rules: Luminous efficacy must be >= 120 lm/W, CRI must be >= 70, IP rating must be IP65 or higher.";
-        }
-
-        // 3. Ask Gemini to extract specifications and cross-check using SDK content helpers
+        // 2. Instruct AI to extract and evaluate ALL product specification sheets found in the document
         const prompt = `
-            You are a lighting compliance verification engine. Read this PDF data sheet.
-            Extract the following parameters: Wattage, Delivered Lumens, Luminous Efficacy, CCT, CRI, and IP Rating.
-            Evaluate them strictly against these standards: ${standardRules}
+            You are a multi-page lighting compliance verification engine. Read this entire PDF document.
+            Identify EVERY individual specification sheet or product section. Look for product reference labels (e.g., TYPE D1.6, TYPE S2, etc.).
             
-            Return your response ONLY as a valid JSON object in this exact format:
-            {
-              "status": "PASS" or "FAIL",
-              "reason": "Clear explanation of why it passed or failed any requirements",
-              "extractedSpecs": {
-                "wattage": "...",
-                "lumens": "...",
-                "efficacy": "...",
-                "cri": "...",
-                "ipRating": "..."
+            For each product found:
+            - Identify its product reference label.
+            - Determine its product category (e.g., Recessed Spotlight, Street Light, High Bay).
+            - Extract its parameters: Wattage, Delivered Lumens, Luminous Efficacy, CCT, CRI, and IP Rating.
+            - Evaluate it against standard rules for that category (Recessed Spotlight rules: efficacy >= 80, CRI >= 90; Street Light rules: efficacy >= 120, CRI >= 70, IP >= IP65; High Bay rules: efficacy >= 130, CRI >= 80).
+            
+            Return your response ONLY as a valid JSON array of objects in this exact format:
+            [
+              {
+                "productReference": "TYPE D1.6",
+                "productCategory": "Recessed Spotlight",
+                "status": "PASS",
+                "reason": "All specifications met.",
+                "extractedSpecs": {
+                  "wattage": "14W",
+                  "lumens": "1007lm",
+                  "efficacy": "80lm/W",
+                  "cri": ">90"
+                }
               }
-            }
+            ]
         `;
 
         const response = await ai.models.generateContent({
@@ -58,31 +66,32 @@ app.post('/api/verify-lighting', upload.single('pdfFile'), async (req, res) => {
             ])
         });
 
-        // Clean and parse the AI response text into JSON
         const cleanText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
-        const evaluation = JSON.parse(cleanText);
+        const evaluations = JSON.parse(cleanText); // Expecting an array of results
 
-        // 4. Save submission and results to your Supabase catalog
-        const { error } = await supabase
-            .from('lighting_submissions')
-            .insert([
-                {
-                    manufacturer_name: manufacturer,
-                    country: country,
-                    product_type: productType,
-                    file_url: filePath, 
-                    status: evaluation.status,
-                    evaluation_details: evaluation
-                }
-            ]);
+        // 3. Loop through each evaluated product and insert them individually into Supabase
+        for (const item of evaluations) {
+            const { error } = await supabase
+                .from('lighting_submissions')
+                .insert([
+                    {
+                        manufacturer_name: manufacturer,
+                        country: country,
+                        product_type: `${item.productReference} (${item.productCategory})`,
+                        file_url: filePath, 
+                        status: item.status,
+                        evaluation_details: item
+                    }
+                ]);
 
-        if (error) throw error;
+            if (error) console.error("Database insert error for item:", error);
+        }
 
         // Clean up temporary local file
         fs.unlinkSync(filePath);
 
-        // 5. Send result back to the frontend website
-        res.json({ success: true, evaluation });
+        // 4. Send results back to the frontend
+        res.json({ success: true, evaluations });
 
     } catch (err) {
         console.error(err);
@@ -90,4 +99,4 @@ app.post('/api/verify-lighting', upload.single('pdfFile'), async (req, res) => {
     }
 });
 
-app.listen(3000, () => console.log('Lighting verification backend running on port 3000'));
+app.listen(3000, () => console.log('Lighting batch verification backend running on port 3000'));
