@@ -53,10 +53,7 @@ app.post('/api/verify-lighting', upload.single('pdfFile'), async (req, res) => {
 
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
-            contents: [
-                { type: 'text', text: prompt },
-                { type: 'document', uri: uploadedFile.uri, mimeType: uploadedFile.mimeType }
-            ]
+            contents: [uploadedFile, prompt] // <-- Pass uploadedFile directly here
         });
 
         // Clean and parse the AI response text into JSON
