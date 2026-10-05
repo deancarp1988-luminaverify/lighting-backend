@@ -12,12 +12,25 @@ const upload = multer({ dest: 'uploads/' });
 const ai = new GoogleGenAI({});
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-// Define standards for different lighting categories
 const lightingStandards = {
     "Recessed Spotlight": "Luminous efficacy must be >= 80 lm/W, CRI must be >= 90.",
     "Street Light": "Luminous efficacy must be >= 120 lm/W, CRI must be >= 70, IP rating must be IP65 or higher.",
     "High Bay": "Luminous efficacy must be >= 130 lm/W, CRI must be >= 80."
 };
+
+// Helper function to automatically retry if Google's servers are busy (503 error)
+async function generateWithRetry(fn, retries = 3, delay = 3000) {
+    try {
+        return await fn();
+    } catch (error) {
+        if (retries > 0 && (error.status === 503 || error.message?.includes('503') || error.message?.includes('high demand'))) {
+            console.log(`Server busy (503). Retrying automatically in ${delay / 1000} seconds... (${retries} attempts left)`);
+            await new Promise(res => setTimeout(res, delay));
+            return generateWithRetry(fn, retries - 1, delay * 2);
+        }
+        throw error;
+    }
+}
 
 app.post('/api/verify-lighting', upload.single('pdfFile'), async (req, res) => {
     try {
@@ -30,7 +43,6 @@ app.post('/api/verify-lighting', upload.single('pdfFile'), async (req, res) => {
             config: { mimeType: 'application/pdf' }
         });
 
-        // 2. Instruct AI to extract and evaluate ALL product specification sheets found in the document
         const prompt = `
             You are a multi-page lighting compliance verification engine. Read this entire PDF document.
             Identify EVERY individual specification sheet or product section. Look for product reference labels (e.g., TYPE D1.6, TYPE S2, etc.).
@@ -58,18 +70,21 @@ app.post('/api/verify-lighting', upload.single('pdfFile'), async (req, res) => {
             ]
         `;
 
-        const response = await ai.models.generateContent({
-            model: 'gemini-3.8-flash',
-            contents: createUserContent([
-                createPartFromUri(uploadedFile.uri, uploadedFile.mimeType),
-                prompt
-            ])
+        // 2. Call Gemini with automatic retry logic for 503 errors
+        const response = await generateWithRetry(async () => {
+            return await ai.models.generateContent({
+                model: 'gemini-3.8-flash',
+                contents: createUserContent([
+                    createPartFromUri(uploadedFile.uri, uploadedFile.mimeType),
+                    prompt
+                ])
+            });
         });
 
         const cleanText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
-        const evaluations = JSON.parse(cleanText); // Expecting an array of results
+        const evaluations = JSON.parse(cleanText);
 
-        // 3. Loop through each evaluated product and insert them individually into Supabase
+        // 3. Loop through each evaluated product and insert them into Supabase
         for (const item of evaluations) {
             const { error } = await supabase
                 .from('lighting_submissions')
@@ -90,7 +105,6 @@ app.post('/api/verify-lighting', upload.single('pdfFile'), async (req, res) => {
         // Clean up temporary local file
         fs.unlinkSync(filePath);
 
-        // 4. Send results back to the frontend
         res.json({ success: true, evaluations });
 
     } catch (err) {
