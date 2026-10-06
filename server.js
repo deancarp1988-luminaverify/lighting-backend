@@ -12,10 +12,30 @@ const upload = multer({ dest: 'uploads/' });
 const ai = new GoogleGenAI({});
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-const lightingStandards = {
-    "Recessed Spotlight": "Luminous efficacy must be >= 80 lm/W, CRI must be >= 90.",
-    "Street Light": "Luminous efficacy must be >= 120 lm/W, CRI must be >= 70, IP rating must be IP65 or higher.",
-    "High Bay": "Luminous efficacy must be >= 130 lm/W, CRI must be >= 80."
+// Define strict project schedule requirements for each specific product reference tag
+const projectScheduleRules = {
+    "TYPE D1.6": {
+        category: "Recessed Spotlight",
+        minLumens: 1000,
+        maxLumens: 1400,
+        minEfficacy: 80,
+        minCri: 90
+    },
+    "TYPE D2.6": {
+        category: "Recessed Spotlight",
+        minLumens: 1500,
+        maxLumens: 2000,
+        minEfficacy: 85,
+        minCri: 90
+    },
+    "TYPE S2": {
+        category: "Street Light",
+        minLumens: 5000,
+        maxLumens: 10000,
+        minEfficacy: 120,
+        minCri: 70,
+        requiredIp: "IP65"
+    }
 };
 
 // Helper function to automatically retry if Google's servers are busy (503 error)
@@ -43,34 +63,37 @@ app.post('/api/verify-lighting', upload.single('pdfFile'), async (req, res) => {
             config: { mimeType: 'application/pdf' }
         });
 
+        // 2. Instruct AI to focus strictly on extraction and labeling
         const prompt = `
-            You are a multi-page lighting compliance verification engine. Read this entire PDF document.
-            Identify EVERY individual specification sheet or product section. Look for product reference labels (e.g., TYPE D1.6, TYPE S2, etc.).
+            You are a multi-page lighting document parser. Read this entire PDF document.
+            Identify EVERY individual specification sheet or product section. Look for product reference labels (e.g., TYPE D1.6, TYPE D2.6, TYPE S2).
             
-            For each product found:
-            - Identify its product reference label.
-            - Determine its product category (e.g., Recessed Spotlight, Street Light, High Bay).
-            - Extract its parameters: Wattage, Delivered Lumens, Luminous Efficacy, CCT, CRI, and IP Rating.
-            - Evaluate it against standard rules for that category (Recessed Spotlight rules: efficacy >= 80, CRI >= 90; Street Light rules: efficacy >= 120, CRI >= 70, IP >= IP65; High Bay rules: efficacy >= 130, CRI >= 80).
-            
+            For each product found, extract these exact parameters into the "extractedSpecs" object:
+            - "wattage" (e.g., "14W")
+            - "lumens" (e.g., "1200lm")
+            - "efficacy" (e.g., "85lm/W")
+            - "cct" (e.g., "3000K")
+            - "cri" (e.g., "92")
+            - "ipRating" (e.g., "IP20")
+            - "beamAngle", "inputVoltage", "powerFactor", "dimming", "driver", "dimensions", "lifespan"
+
             Return your response ONLY as a valid JSON array of objects in this exact format:
             [
               {
                 "productReference": "TYPE D1.6",
                 "productCategory": "Recessed Spotlight",
-                "status": "PASS",
-                "reason": "All specifications met.",
                 "extractedSpecs": {
                   "wattage": "14W",
-                  "lumens": "1007lm",
-                  "efficacy": "80lm/W",
-                  "cri": ">90"
+                  "lumens": "1200lm",
+                  "efficacy": "85lm/W",
+                  "cct": "3000K",
+                  "cri": "92",
+                  "ipRating": "IP20"
                 }
               }
             ]
         `;
 
-        // 2. Call Gemini with automatic retry logic for 503 errors
         const response = await generateWithRetry(async () => {
             return await ai.models.generateContent({
                 model: 'gemini-3.8-flash',
@@ -82,20 +105,75 @@ app.post('/api/verify-lighting', upload.single('pdfFile'), async (req, res) => {
         });
 
         const cleanText = response.text.replace(/```json/g, '').replace(/```/g, '').trim();
-        const evaluations = JSON.parse(cleanText);
+        const extractedProducts = JSON.parse(cleanText);
 
-        // 3. Loop through each evaluated product and insert them into Supabase
-        for (const item of evaluations) {
+        const evaluatedResults = [];
+
+        // 3. Programmatically evaluate each product against the Project Schedule Rules
+        for (const item of extractedProducts) {
+            const refLabel = item.productReference?.trim();
+            const rule = projectScheduleRules[refLabel];
+
+            let status = "PASS";
+            let reasons = [];
+
+            if (!rule) {
+                status = "FAIL";
+                reasons.push(`Product reference "${refLabel}" not found in project schedule rules.`);
+            } else {
+                // Parse numeric values safely from strings (e.g., "1200lm" -> 1200)
+                const lumensVal = parseFloat(item.extractedSpecs?.lumens);
+                const efficacyVal = parseFloat(item.extractedSpecs?.efficacy);
+                const criVal = parseFloat(item.extractedSpecs?.cri);
+
+                // Check Lumen Range
+                if (rule.minLumens && lumensVal < rule.minLumens) {
+                    status = "FAIL";
+                    reasons.push(`Lumens (${lumensVal}lm) is below minimum required (${rule.minLumens}lm).`);
+                }
+                if (rule.maxLumens && lumensVal > rule.maxLumens) {
+                    status = "FAIL";
+                    reasons.push(`Lumens (${lumensVal}lm) exceeds maximum allowed (${rule.maxLumens}lm).`);
+                }
+
+                // Check Efficacy
+                if (rule.minEfficacy && efficacyVal < rule.minEfficacy) {
+                    status = "FAIL";
+                    reasons.push(`Efficacy (${efficacyVal}lm/W) is below minimum required (${rule.minEfficacy}lm/W).`);
+                }
+
+                // Check CRI
+                if (rule.minCri && criVal < rule.minCri) {
+                    status = "FAIL";
+                    reasons.push(`CRI (${criVal}) is below minimum required (${rule.minCri}).`);
+                }
+
+                if (reasons.length === 0) {
+                    reasons.push("All project schedule specifications successfully met.");
+                }
+            }
+
+            const evaluationDetails = {
+                productReference: refLabel,
+                productCategory: item.productCategory,
+                status: status,
+                reason: reasons.join(" "),
+                extractedSpecs: item.extractedSpecs
+            };
+
+            evaluatedResults.push(evaluationDetails);
+
+            // 4. Insert individual results into Supabase
             const { error } = await supabase
                 .from('lighting_submissions')
                 .insert([
                     {
                         manufacturer_name: manufacturer,
                         country: country,
-                        product_type: `${item.productReference} (${item.productCategory})`,
+                        product_type: `${refLabel} (${item.productCategory})`,
                         file_url: filePath, 
-                        status: item.status,
-                        evaluation_details: item
+                        status: status,
+                        evaluation_details: evaluationDetails
                     }
                 ]);
 
@@ -105,7 +183,7 @@ app.post('/api/verify-lighting', upload.single('pdfFile'), async (req, res) => {
         // Clean up temporary local file
         fs.unlinkSync(filePath);
 
-        res.json({ success: true, evaluations });
+        res.json({ success: true, evaluations: evaluatedResults });
 
     } catch (err) {
         console.error(err);
@@ -113,4 +191,4 @@ app.post('/api/verify-lighting', upload.single('pdfFile'), async (req, res) => {
     }
 });
 
-app.listen(3000, () => console.log('Lighting batch verification backend running on port 3000'));
+app.listen(3000, () => console.log('Lighting project verification server running on port 3000'));
