@@ -229,10 +229,15 @@ app.post('/api/verify-lighting', upload.single('pdfFile'), async (req, res) => {
                     {
                         manufacturer_name: manufacturer,
                         country: country,
-                        product_type: `${refLabel} (${item.productCategory})`,
+                        product_type: `${item.productReference} (${item.productCategory})`,
                         file_url: filePath, 
-                        status: status,
-                        evaluation_details: evaluationDetails
+                        status: item.status,
+                        wattage: specs.wattage || null,
+                        lumens: specs.lumens || null,
+                        efficacy: specs.efficacy || null,
+                        cri: specs.cri || null,
+                        ip_rating: specs.ipRating || null,
+                        evaluation_details: item
                     }
                 ]);
 
