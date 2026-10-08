@@ -12,29 +12,79 @@ const upload = multer({ dest: 'uploads/' });
 const ai = new GoogleGenAI({});
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-// Define strict project schedule requirements for each specific product reference tag
+// 1. Universal rules that apply to EVERY product type automatically
+const globalStandards = {
+    minEfficacy: 85,
+    minCri: 90
+};
+
+// 2. Only list the unique differences (like lumens and categories) for each product tag
 const projectScheduleRules = {
     "TYPE D1.6": {
-        category: "Recessed Spotlight",
+        category: "Recessed Downlight",
         minLumens: 1000,
         maxLumens: 1400,
-        minEfficacy: 80,
-        minCri: 90
+
     },
     "TYPE D2.6": {
-        category: "Recessed Spotlight",
-        minLumens: 1500,
-        maxLumens: 2000,
-        minEfficacy: 85,
-        minCri: 90
+        category: "Recessed Downlight",
+        minLumens: 1000,
+        maxLumens: 1400,
+
     },
-    "TYPE S2": {
-        category: "Street Light",
-        minLumens: 5000,
-        maxLumens: 10000,
-        minEfficacy: 120,
-        minCri: 70,
-        requiredIp: "IP65"
+    "TYPE D3.6": {
+        category: "Recessed Downlight",
+        minLumens: 1000,
+        maxLumens: 1400,
+
+    },
+    "TYPE D4.6": {
+        category: "Recessed Downlight",
+        minLumens: 1000,
+        maxLumens: 1400,
+
+    },
+    "TYPE D5.2": {
+        category: "Recessed Downlight",
+        minLumens: 25000,
+        maxLumens: 3500,
+
+    },
+    "TYPE D6.1": {
+        category: "Recessed Downlight",
+        minLumens: 1000,
+        maxLumens: 1400,
+
+    },
+    "TYPE D6.2": {
+        category: "Recessed Downlight",
+        minLumens: 1000,
+        maxLumens: 1400,
+
+    },
+    "TYPE D7.2": {
+        category: "Recessed Downlight",
+        minLumens: 1000,
+        maxLumens: 1400,
+
+    },
+    "TYPE D8.1": {
+        category: "Recessed Downlight",
+        minLumens: 1000,
+        maxLumens: 1400,
+
+    },
+    "TYPE D9.1": {
+        category: "Recessed Downlight",
+        minLumens: 1000,
+        maxLumens: 1400,
+
+    }
+     "TYPE ST1.2": {
+        category: "Track Spotlight",
+        minLumens: 3000,
+        maxLumens: 4000,
+
     }
 };
 
@@ -66,29 +116,38 @@ app.post('/api/verify-lighting', upload.single('pdfFile'), async (req, res) => {
         // 2. Instruct AI to focus strictly on extraction and labeling
         const prompt = `
             You are a multi-page lighting document parser. Read this entire PDF document.
-            Identify EVERY individual specification sheet or product section. Look for product reference labels (e.g., TYPE D1.6, TYPE D2.6, TYPE S2).
+            Identify EVERY individual specification sheet or product section. Look for product reference labels (e.g., TYPE D1.6, TYPE D2.6, TYPE ST1.2).
             
             For each product found, extract these exact parameters into the "extractedSpecs" object:
             - "wattage" (e.g., "14W")
-            - "lumens" (e.g., "1200lm")
+            - "Source lumens" (e.g., "1200lm")
+            - "Delivered lumens" (e.g., "1000lm")
             - "efficacy" (e.g., "85lm/W")
             - "cct" (e.g., "3000K")
             - "cri" (e.g., "92")
+            - "LOR" (e.g., "70%")
             - "ipRating" (e.g., "IP20")
-            - "beamAngle", "inputVoltage", "powerFactor", "dimming", "driver", "dimensions", "lifespan"
+            - "beamAngle", 
+            - "inputVoltage", 
+            - "dimming protocal", (e.g., DALI-2) 
+            - "driver", "dimensions", "lifespan"
 
             Return your response ONLY as a valid JSON array of objects in this exact format:
             [
               {
                 "productReference": "TYPE D1.6",
-                "productCategory": "Recessed Spotlight",
+                "productCategory": "Recessed Downlight",
                 "extractedSpecs": {
                   "wattage": "14W",
-                  "lumens": "1200lm",
+                  "source lumens": "1200lm",
+                  "delivered lumens": "1000lm",
                   "efficacy": "85lm/W",
                   "cct": "3000K",
                   "cri": "92",
                   "ipRating": "IP20"
+                  "beamAgnle": "30°"
+                  "input voltage": 240V
+                  "dimming protocal": "DALI-2"
                 }
               }
             ]
