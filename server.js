@@ -79,7 +79,7 @@ const projectScheduleRules = {
         minLumens: 1000,
         maxLumens: 1400,
 
-    }
+    },
      "TYPE ST1.2": {
         category: "Track Spotlight",
         minLumens: 3000,
